@@ -6,7 +6,15 @@ from gensim.utils import simple_preprocess
 from gensim import models
 import nltk
 import numpy as np
+import math
+import preprocessor as p
+from gensim import corpora
+from gensim.utils import simple_preprocess
+from gensim import models
+import nltk
+import numpy as np
 from gensim.parsing.porter import PorterStemmer
+from RNN import RNN
 
 
 # nltk.download('wordnet')
@@ -436,6 +444,62 @@ if __name__ == '__main__':
 
     print ("..................End of Neural Network................")
 
+    print("\n------------------------------------------------\n")
+    print("..................Beginning of RNN Model................")
+
+    # (X_train, Y_train, vocab_map are already loaded from DataRepresentationBuilder earlier in the script)
+    # X_train is a list of lists (TF-IDF vectors)
+    # Y_train is a list of 1D numpy arrays (one-hot encoded labels)
+    # vocab_map is the emotion vocabulary map
+
+    # Prepare data for RNN
+    X_train_np = np.array(X_train) # Convert list of lists to 2D numpy array (num_samples, vocab_size)
+    
+    # X_train_for_rnn should be a list of 2D numpy arrays, each (1, vocab_size)
+    # This represents each sample as a sequence of length 1.
+    X_train_for_rnn = [vec.reshape(1, -1) for vec in X_train_np]
+    
+    # Y_train is a list of 1D numpy arrays. Convert to a 2D numpy array (num_samples, num_classes)
+    # This is suitable for RNN's __init__ to infer num_classes and for the train method's iteration.
+    Y_train_for_rnn_constructor = np.array(Y_train) 
+
+
+    current_vocab_size = X_train_np.shape[1]
+
+    # Instantiate RNN
+    rnn_learning_rate = 0.001
+    rnn_epochs = 100  # RNNs can be slow, 100 is a starting point
+    rnn_hidden_layer_size = 64
+
+    rnn_model = RNN(
+        X_train=X_train_for_rnn, # Pass the list of sequences
+        y_train=Y_train_for_rnn_constructor, # Pass the 2D numpy array for shape inference and iteration
+        epochs=rnn_epochs,
+        learning_rate=rnn_learning_rate,
+        hidden_layer_size=rnn_hidden_layer_size,
+        one_hot_classes_map=vocab_map,
+        vocab_size=current_vocab_size
+    )
+
+    # Train RNN
+    print("Starting RNN model training...")
+    rnn_model.train()
+    print("RNN model training complete.")
+
+    # Prepare Test Data for RNN
+    # id_tweet_vec is already loaded: list of (id_val, tweet_text, vec_tfidf)
+    # where vec_tfidf is a 1D numpy array
+    id_tweet_vec_for_rnn = []
+    for id_val, tweet_text, vec_tfidf in id_tweet_vec:
+        # Ensure vec_tfidf is a numpy array before reshaping
+        vec_np = np.array(vec_tfidf) # Should already be a numpy array, but to be safe
+        id_tweet_vec_for_rnn.append((id_val, tweet_text, vec_np.reshape(1, -1)))
+
+    # Predict and Print File (RNN)
+    print("Predicting with RNN model and writing to test_rnn.csv...")
+    rnn_model.predict_and_print_file(id_tweet_vec_for_rnn, "test_rnn.csv")
+    
+    print("..................End of RNN Model................")
 
 
 class CrossValidationTrainLR():
