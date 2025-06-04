@@ -15,6 +15,7 @@ import nltk
 import numpy as np
 from gensim.parsing.porter import PorterStemmer
 from RNN import RNN
+from AttentionModel import AttentionModel
 
 
 # nltk.download('wordnet')
@@ -500,6 +501,69 @@ if __name__ == '__main__':
     rnn_model.predict_and_print_file(id_tweet_vec_for_rnn, "test_rnn.csv")
     
     print("..................End of RNN Model................")
+
+    print("\n------------------------------------------------\n")
+    print("..................Beginning of Attention Model................")
+
+    # X_train, Y_train, vocab_map, id_tweet_vec are assumed to be loaded from DataRepresentationBuilder
+
+    # Prepare data for AttentionModel
+    # Query: the TF-IDF vector itself (1D numpy array)
+    # Key-Value Input: the TF-IDF vector reshaped as a sequence of length 1 (2D numpy array: 1, input_dim)
+
+    # Ensure elements are numpy arrays first
+    X_train_np_att = [np.asarray(vec) for vec in X_train]
+    Y_train_np_att = [np.asarray(label) for label in Y_train]
+
+    X_query_train_att = X_train_np_att
+    X_kv_train_att = [vec.reshape(1, -1) for vec in X_train_np_att]
+
+    # Ensure Y_train_att is a list of 2D arrays (1, num_classes)
+    if not Y_train_np_att: # Check if Y_train_np_att is empty
+        print("Attention Model: Y_train data is empty. Skipping Attention Model.")
+        Y_train_att = []
+    else:
+        num_classes_att = Y_train_np_att[0].shape[0] # Infer from 1D one-hot vector
+        Y_train_att = [y.reshape(1, num_classes_att) if y.ndim == 1 else y for y in Y_train_np_att]
+
+    if not X_query_train_att or not X_kv_train_att or not Y_train_att:
+        print("Attention Model: Training data (X_query, X_kv, or Y) is effectively empty. Skipping Attention Model.")
+    else:
+        # Further check: ensure lists are not empty before accessing element 0
+        if not X_query_train_att or not Y_train_att:
+            print("Attention Model: Critical training data lists are empty after processing. Skipping.")
+        else:
+            current_input_dim_att = X_query_train_att[0].shape[0]
+            current_output_dim_att = Y_train_att[0].shape[1]
+            attention_internal_dim = 64 # Hyperparameter for attention mechanism internal dimension
+
+            att_model = AttentionModel(
+                input_dim=current_input_dim_att,
+                attention_dim=attention_internal_dim,
+                output_dim=current_output_dim_att,
+                one_hot_classes_map=vocab_map, # This is train_emotions_vocab from DataRepresentationBuilder
+                learning_rate=0.001, # A common learning rate
+                epochs=50 # Reduced number of epochs for initial integration and testing
+            )
+
+            print("Starting Attention Model training...")
+            att_model.train(X_query_train_att, X_kv_train_att, Y_train_att)
+            print("Attention Model training complete.")
+
+            # Prepare Test Data for Attention Model using id_tweet_vec
+            # id_tweet_vec is a list of tuples: (id_val, tweet_text, vec_tfidf)
+            id_tweet_query_kv_list_att = []
+            for id_val, tweet_text, vec_tfidf in id_tweet_vec:
+                query_input = np.asarray(vec_tfidf) # TF-IDF vector as 1D array
+                # Reshape TF-IDF vector to (1, input_dim) for key-value sequence of length 1
+                kv_input = np.asarray(vec_tfidf).reshape(1, -1)
+                id_tweet_query_kv_list_att.append((id_val, tweet_text, query_input, kv_input))
+
+            # Predict and Print File (Attention Model)
+            print("Predicting with Attention Model and writing to test_attention.csv...")
+            att_model.predict_and_print_file(id_tweet_query_kv_list_att, "test_attention.csv")
+
+    print("..................End of Attention Model................")
 
 
 class CrossValidationTrainLR():
