@@ -1,221 +1,228 @@
+"""Feed-forward neural network utilities."""
+
+from __future__ import annotations
+
+import math
+from typing import Dict, List, Sequence, Tuple
 
 import numpy as np
-import math
-from DataRepresentationBuilder import DataRepresentationBuilder
 
-class MultiLayerNN():
-    
-    ## Layer Implementation 
-    # reference: https://blog.zhaytam.com/2018/08/15/implement-neural-network-backpropagation/
-    class Layer():
-        
-        def __init__(self, input_size, output_size) -> None:
-            
+
+ArrayLike = np.ndarray | Sequence[float]
+
+
+def _as_numpy_2d(array: ArrayLike | Sequence[ArrayLike]) -> np.ndarray:
+    arr = np.asarray(array)
+    if arr.ndim == 1:
+        return arr.reshape(1, -1)
+    if arr.ndim != 2:
+        raise ValueError(f"Expected a 1D or 2D array, received shape {arr.shape}.")
+    return arr
+
+
+class MultiLayerNN:
+    """Simple two layer feed-forward neural network."""
+
+    class Layer:
+        def __init__(self, input_size: int, output_size: int) -> None:
             limit = 1 / math.sqrt(input_size)
-            self.weights = np.random.uniform(-1 * limit, limit, (input_size, output_size))
-            # self.weights = np.random.rand(input_size, output_size)
+            self.weights = np.random.uniform(-limit, limit, (input_size, output_size))
             self.bias = np.random.rand(1, output_size)
+            self.last_input: np.ndarray | None = None
+            self.last_output: np.ndarray | None = None
 
-            # store the last inputs and outputs
-            self.last_input = None
-            self.last_output = None
-        
-        def forward(self, X):
+        def forward(self, X: np.ndarray) -> np.ndarray:
             return np.dot(X, self.weights) + self.bias
 
-        def activation(self, X):
+        def activation(self, X: np.ndarray) -> np.ndarray:
             return 1 / (1 + np.exp(-X))
 
-        def forward_with_activation(self, X):
-            forward_out = self.forward(X)
-            out = self.activation(forward_out)
+        def forward_with_activation(self, X: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+            linear = self.forward(X)
+            activated = self.activation(linear)
             self.last_input = X
-            self.last_output = out
-            return out, forward_out
-            
+            self.last_output = activated
+            return activated, linear
+
     def __init__(
-        self, 
-        X_train, 
-        y_train, 
-        epochs,
-        learning_rate,
-        hidden_layer_size,
-        one_hot_classes_map,
-        batch_size = None) -> None:
-        
-        self.X_train = X_train
-        self.y_train = y_train
+        self,
+        X_train: ArrayLike | Sequence[ArrayLike],
+        y_train: ArrayLike | Sequence[ArrayLike],
+        epochs: int,
+        learning_rate: float,
+        hidden_layer_size: int,
+        one_hot_classes_map: Dict[str, np.ndarray],
+    ) -> None:
+        self.X_train = _as_numpy_2d(X_train)
+        self.y_train = _as_numpy_2d(y_train)
         self.one_hot_classes_map = one_hot_classes_map
-        self.epochs = epochs
-        self.learning_rate = learning_rate
-        self.hidden_layer_size = hidden_layer_size
-        self.batch_size = batch_size
-        
-        ## init the network
-        ## init weights and bias         
-        self.layers = []
-        self.layers.append(self.Layer(X_train.shape[1], hidden_layer_size))
-        self.layers.append(self.Layer(hidden_layer_size, y_train.shape[1]))
-    
-    def forward_propagation(self, X):
-        f1, z1 = self.layers[0].forward_with_activation(X)
-        f2, z2 = self.layers[1].forward_with_activation(f1)
-        return self.softmax(z2)
+        self.epochs = int(epochs)
+        self.learning_rate = float(learning_rate)
 
-    def softmax(self, x):  
-        max = np.max(x,axis=1,keepdims=True) #returns max of each row and keeps same dims
-        e_x = np.exp(x - max) #subtracts each row with its max value
-        sum = np.sum(e_x,axis=1,keepdims=True) #returns sum of each row and keeps same dims
-        f_x = e_x / sum 
-        return f_x
+        self.layers = [
+            self.Layer(self.X_train.shape[1], hidden_layer_size),
+            self.Layer(hidden_layer_size, self.y_train.shape[1]),
+        ]
 
-    def sigmoid_derivative(self, x):
+    @staticmethod
+    def _softmax(x: np.ndarray) -> np.ndarray:
+        x_2d = _as_numpy_2d(x)
+        max_vals = np.max(x_2d, axis=1, keepdims=True)
+        exp = np.exp(x_2d - max_vals)
+        sums = np.sum(exp, axis=1, keepdims=True)
+        return exp / sums
+
+    @staticmethod
+    def _sigmoid_derivative(x: np.ndarray) -> np.ndarray:
         return x * (1 - x)
 
-    
-    ## backpropagation layers
-    ## reference: https://www.cristiandima.com/neural-networks-from-scratch-in-python
-    def backward_propagation(self, y, z):
-        last_layer_error = z - y
-        last_layer_delta = last_layer_error # consider the loss function as log loss
-        self.layers[1].weights -= self.learning_rate * np.dot(self.layers[1].last_input.T, last_layer_delta)
-        self.layers[1].bias -= self.learning_rate * np.sum(last_layer_delta, axis=0, keepdims=True)
-        
-        first_layer_error = np.dot(last_layer_delta, self.layers[1].weights.T)
-        first_layer_delta = first_layer_error * self.sigmoid_derivative(self.layers[0].last_output)
-        self.layers[0].weights -= self.learning_rate * np.dot(self.layers[0].last_input.T, first_layer_delta)
-        self.layers[0].bias -= self.learning_rate * np.sum(first_layer_delta, axis=0, keepdims=True)
-        
-    def predict(self, X):
-        last_layer_output = self.forward_propagation(X)
-        predicted_class = np.argmax(last_layer_output, axis=1)
-        one_hot_predicted_class = np.zeros(last_layer_output.shape[1])
-        one_hot_predicted_class[predicted_class] = 1
-        return one_hot_predicted_class
-    
-    def test_and_get_accuracy(self, X_test, y_test):
-        correcect_predictions = 0
-        for i in range(len(X_test)):
-            x = X_test[i]
-            y = y_test[i]
-            y1 = self.predict(x)
-            if (y == y1).all():
-                correcect_predictions += 1
-        return (correcect_predictions / len(X_test)) * 100
+    def forward_propagation(self, X: ArrayLike | Sequence[ArrayLike]) -> np.ndarray:
+        inputs = _as_numpy_2d(X)
+        first_out, _ = self.layers[0].forward_with_activation(inputs)
+        _, second_linear = self.layers[1].forward_with_activation(first_out)
+        return self._softmax(second_linear)
 
-    def get_emotion_class(self, one_hot_class):
-        for key, value in self.one_hot_classes_map.items():
-            if (value == one_hot_class).all():
-                return key
-        return self.one_hot_classes_map[one_hot_class]    
- 
-    def predict_and_print_file(self, id_tweet_vec, file_name):
-        
-        f = open(file_name, "w")
-        for id, tweet, vec in id_tweet_vec:
-            y_pred = self.predict(vec)
-            pred_emotion = self.get_emotion_class(y_pred)
-            f.write(str(id) + "," + str(tweet) + "," + str(pred_emotion) + "\n")
-            
-    def train(self):
-        ## repeat the training for the number of epochs
-        for i in range(self.epochs):
-            out = self.forward_propagation(self.X_train)
-            self.backward_propagation(self.y_train,  out)
+    def backward_propagation(self, y_true: np.ndarray, y_pred: np.ndarray) -> None:
+        last_error = y_pred - y_true
+        last_delta = last_error
+        last_input = self.layers[1].last_input
+        assert last_input is not None
+        self.layers[1].weights -= self.learning_rate * np.dot(last_input.T, last_delta)
+        self.layers[1].bias -= self.learning_rate * np.sum(last_delta, axis=0, keepdims=True)
+
+        first_error = np.dot(last_delta, self.layers[1].weights.T)
+        first_output = self.layers[0].last_output
+        assert first_output is not None
+        first_delta = first_error * self._sigmoid_derivative(first_output)
+        first_input = self.layers[0].last_input
+        assert first_input is not None
+        self.layers[0].weights -= self.learning_rate * np.dot(first_input.T, first_delta)
+        self.layers[0].bias -= self.learning_rate * np.sum(first_delta, axis=0, keepdims=True)
+
+    def train(self) -> None:
+        for _ in range(self.epochs):
+            outputs = self.forward_propagation(self.X_train)
+            self.backward_propagation(self.y_train, outputs)
+
+    def predict(self, X: ArrayLike | Sequence[ArrayLike]) -> np.ndarray:
+        probabilities = self.forward_propagation(X)
+        indices = np.argmax(probabilities, axis=1)
+        one_hot = np.zeros_like(probabilities)
+        one_hot[np.arange(one_hot.shape[0]), indices] = 1
+        return one_hot
+
+    def test_and_get_accuracy(
+        self,
+        X_test: ArrayLike | Sequence[ArrayLike],
+        y_test: ArrayLike | Sequence[ArrayLike],
+    ) -> float:
+        X_arr = _as_numpy_2d(X_test)
+        y_arr = _as_numpy_2d(y_test)
+        predictions = self.predict(X_arr)
+        matches = np.all(predictions == y_arr, axis=1)
+        return float(np.mean(matches) * 100) if len(matches) else 0.0
+
+    def get_emotion_class(self, one_hot_class: np.ndarray) -> str | None:
+        target = np.asarray(one_hot_class).flatten()
+        for label, encoding in self.one_hot_classes_map.items():
+            if np.array_equal(np.asarray(encoding).flatten(), target):
+                return label
+        return None
+
+    def predict_and_print_file(
+        self,
+        id_tweet_vec: Sequence[Tuple[str, str, ArrayLike]],
+        file_name: str,
+    ) -> None:
+        with open(file_name, "w", encoding="utf-8") as file:
+            file.write("id,tweet,emotions\n")
+            for tweet_id, tweet_text, vec in id_tweet_vec:
+                predicted = self.predict(vec)[0]
+                emotion = self.get_emotion_class(predicted) or "Unknown"
+                file.write(f"{tweet_id},{str(tweet_text).replace(',', ';')},{emotion}\n")
 
 
-class CrossValidationTrain():
-    
-    learning_rate = 0.001
-    epochs = 5000
-    
-    def __init__(self, k, X_train, Y_train, vocab_map) -> None:
-        self.k = k
+class CrossValidationTrain:
+    def __init__(
+        self,
+        k: int,
+        X_train: ArrayLike | Sequence[ArrayLike],
+        Y_train: ArrayLike | Sequence[ArrayLike],
+        vocab_map: Dict[str, np.ndarray],
+        epochs: int,
+        learning_rate: float,
+        hidden_layer_size: int = 10,
+    ) -> None:
+        self.k = int(k)
         self.vocab_map = vocab_map
-        
-        self.x_folds, self.y_folds = self.divide_to_k_folds(X_train, Y_train)
-    
-    def divide_to_k_folds(self, X_train, Y_train):
-        x_folds = []
-        y_folds = []
-        
-        for i in range(self.k):
-            x_folds.append([])
-            y_folds.append([])
-        
-        indexes = []
-        for i in range(len(X_train)):
-            indexes.append(i)
-        np.random.shuffle(indexes)
-        
-        k_fold_indexes = np.array_split(indexes, self.k)
-        
-        for i  in range(len(k_fold_indexes)):
-            fold = k_fold_indexes[i]
-            for j in range(len(fold)):
-                idx = fold[j]
-                x_folds[i].append(X_train[idx])
-                y_folds[i].append(Y_train[idx])
-        
+        self.epochs = int(epochs)
+        self.learning_rate = float(learning_rate)
+        self.hidden_layer_size = int(hidden_layer_size)
+        self.x_folds, self.y_folds = self._divide_into_folds(X_train, Y_train)
+
+    def _divide_into_folds(
+        self,
+        X_train: ArrayLike | Sequence[ArrayLike],
+        Y_train: ArrayLike | Sequence[ArrayLike],
+    ) -> Tuple[List[List[np.ndarray]], List[List[np.ndarray]]]:
+        X_arr = _as_numpy_2d(X_train)
+        Y_arr = _as_numpy_2d(Y_train)
+        indices = np.arange(len(X_arr))
+        np.random.shuffle(indices)
+        x_folds: List[List[np.ndarray]] = [[] for _ in range(self.k)]
+        y_folds: List[List[np.ndarray]] = [[] for _ in range(self.k)]
+        for fold_index, fold in enumerate(np.array_split(indices, self.k)):
+            for idx in fold:
+                x_folds[fold_index].append(X_arr[idx])
+                y_folds[fold_index].append(Y_arr[idx])
         return x_folds, y_folds
 
-    def train_and_test_set(self, i):
-        train_x = []
-        train_y = []
-        test_x = []
-        test_y = []
-        
-        for j in range(self.k):
-            
-            if j == i:
-                test_x = self.x_folds[j]
-                test_y = self.y_folds[j]
+    def _train_test_split(self, fold_index: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        train_x, train_y, test_x, test_y = [], [], [], []
+        for idx in range(self.k):
+            if idx == fold_index:
+                test_x.extend(self.x_folds[idx])
+                test_y.extend(self.y_folds[idx])
             else:
-                train_x.extend(self.x_folds[j])
-                train_y.extend(self.y_folds[j])
-        
+                train_x.extend(self.x_folds[idx])
+                train_y.extend(self.y_folds[idx])
+        return (
+            _as_numpy_2d(train_x),
+            _as_numpy_2d(train_y),
+            _as_numpy_2d(test_x),
+            _as_numpy_2d(test_y),
+        )
 
-        return train_x, train_y, test_x, test_y
-        
-    def train_nn_and_record_accuracy(self):
-        
-        accuracies = []
-        
-        for i in range(self.k):
-            X_train, Y_train, X_test, Y_test = self.train_and_test_set(i)
-            
-            print(len(X_train), len(Y_train), len(X_test), len(Y_test))
-            lr = MultiLayerNN(
-                np.array(X_train),
-                np.array(Y_train),
+    def run(self) -> Tuple[float, float]:
+        training_scores: List[float] = []
+        testing_scores: List[float] = []
+        for fold_idx in range(self.k):
+            X_train_fold, Y_train_fold, X_test_fold, Y_test_fold = self._train_test_split(fold_idx)
+            model = MultiLayerNN(
+                X_train_fold,
+                Y_train_fold,
                 self.epochs,
                 self.learning_rate,
-                10, # hidden layer size
-                vocab_map
+                self.hidden_layer_size,
+                self.vocab_map,
             )
-            lr.train()
-            
-            accuracies.append(lr.test_and_get_accuracy(X_test, Y_test)) 
-        print(accuracies)   
-        print(np.average(accuracies))
-        
+            model.train()
+            training_scores.append(model.test_and_get_accuracy(X_train_fold, Y_train_fold))
+            testing_scores.append(model.test_and_get_accuracy(X_test_fold, Y_test_fold))
+        return float(np.mean(training_scores)), float(np.mean(testing_scores))
 
 
+def _run_default_training() -> None:
+    from DataRepresentationBuilder import DataRepresentationBuilder
 
-dataRepresentationBuilder = DataRepresentationBuilder("train.csv")
-X_train, Y_train, vocab_map = dataRepresentationBuilder.get_training_set_and_vocab()
-# cross_validation_train = CrossValidationTrain(5, X_train, Y_train, vocab_map)
-# cross_validation_train.train_nn_and_record_accuracy()
-id_tweet_vec = dataRepresentationBuilder.get_test_set_representation()
-learning_rate = 0.001
-epochs = 5000
-lr = MultiLayerNN(
-    np.array(X_train),
-    np.array(Y_train),
-    epochs,
-    learning_rate,
-    10, # hidden layer size
-    vocab_map
-)
-lr.train()
-lr.predict_and_print_file(id_tweet_vec, "output.csv")
+    data_builder = DataRepresentationBuilder("train.csv")
+    X_train, Y_train, vocab_map = data_builder.get_training_set_and_vocab()
+    id_tweet_vec = data_builder.get_test_set_representation()
+
+    model = MultiLayerNN(X_train, Y_train, epochs=5000, learning_rate=0.001, hidden_layer_size=10, one_hot_classes_map=vocab_map)
+    model.train()
+    model.predict_and_print_file(id_tweet_vec, "output.csv")
+
+
+if __name__ == "__main__":
+    _run_default_training()
