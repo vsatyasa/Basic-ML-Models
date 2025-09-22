@@ -1,38 +1,63 @@
-import numpy as np
+"""Recurrent neural network classifier."""
+
+from __future__ import annotations
+
 import math
+from typing import Sequence
+
+import numpy as np
+
 
 class RNN:
-    def __init__(self, X_train, y_train, epochs, learning_rate, hidden_layer_size,
-                 one_hot_classes_map, sequence_length=None, vocab_size=None):
-        self.X_train = X_train
-        self.y_train = y_train
-        self.epochs = epochs
-        self.learning_rate = learning_rate
-        self.hidden_layer_size = hidden_layer_size
+    @staticmethod
+    def _ensure_sequence(sequence: np.ndarray) -> np.ndarray:
+        seq = np.asarray(sequence)
+        if seq.ndim == 1:
+            return seq.reshape(1, -1)
+        if seq.ndim != 2:
+            raise ValueError(f"Expected sequence to be 1D or 2D, received shape {seq.shape}.")
+        return seq
+
+    @staticmethod
+    def _ensure_target(target: np.ndarray) -> np.ndarray:
+        arr = np.asarray(target)
+        if arr.ndim == 1:
+            arr = arr.reshape(1, -1)
+        if arr.ndim != 2 or arr.shape[0] != 1:
+            raise ValueError(
+                "Target labels must be convertible to shape (1, num_classes)."
+            )
+        return arr
+
+    def __init__(
+        self,
+        X_train,
+        y_train,
+        epochs,
+        learning_rate,
+        hidden_layer_size,
+        one_hot_classes_map,
+        sequence_length=None,
+        vocab_size=None,
+    ):
+        self.epochs = int(epochs)
+        self.learning_rate = float(learning_rate)
+        self.hidden_layer_size = int(hidden_layer_size)
         self.one_hot_classes_map = one_hot_classes_map
-        self.sequence_length = sequence_length
-        
-        if vocab_size is None:
-            if len(X_train.shape) > 1:
-                self.vocab_size = X_train.shape[1]
-            else:
-                # This case might need more specific handling based on data structure
-                # For now, let's raise an error or set a default if it's ambiguous
-                raise ValueError("Cannot infer vocab_size from X_train shape. Please provide vocab_size.")
-        else:
-            self.vocab_size = vocab_size
 
-        if self.sequence_length is None:
-            # Assuming for now X_train might be a list of sequences or a 2D array where rows are sequences
-            # This part is kept flexible as per instructions.
-            # If X_train is a 2D numpy array and each row is a sequence,
-            # then sequence_length could be X_train.shape[1] if features are timesteps,
-            # or it might be implicitly handled by how data is fed.
-            # For now, just store it.
-            pass
+        self.X_train = [self._ensure_sequence(np.asarray(seq)) for seq in X_train]
+        self.y_train = [self._ensure_target(np.asarray(label)) for label in y_train]
 
-        # Weight initialization
-        num_output_classes = y_train.shape[1]
+        if len(self.X_train) != len(self.y_train):
+            raise ValueError("X_train and y_train must have the same number of samples.")
+        if not self.X_train:
+            raise ValueError("Training data cannot be empty.")
+
+        first_sequence = self.X_train[0]
+        self.sequence_length = sequence_length or first_sequence.shape[0]
+        self.vocab_size = int(vocab_size) if vocab_size is not None else first_sequence.shape[1]
+
+        num_output_classes = self.y_train[0].shape[1]
 
         # Wxh (input to hidden)
         limit_Wxh = math.sqrt(6 / (self.vocab_size + self.hidden_layer_size))
@@ -65,6 +90,7 @@ class RNN:
         X_sequence: A 2D numpy array of shape (sequence_length, vocab_size)
                     where each row is a time step.
         """
+        X_sequence = self._ensure_sequence(X_sequence)
         h_prev = np.zeros((1, self.hidden_layer_size))
 
         self.last_inputs = []
@@ -73,24 +99,15 @@ class RNN:
         self.last_outputs = []
 
         for t in range(X_sequence.shape[0]):
-            xt = X_sequence[t, :]
-            # Ensure xt is 2D: (1, vocab_size) for matrix multiplication
-            # If X_sequence[t,:] is already (vocab_size,), reshape it.
-            # Assuming xt is a slice like X_sequence[t:t+1, :] which is (1, vocab_size)
-            # or X_sequence[t, :].reshape(1, -1) if it's 1D
-            if xt.ndim == 1:
-                xt_reshaped = xt.reshape(1, -1)
-            else:
-                xt_reshaped = xt # Should already be (1, vocab_size) if sliced X_sequence[t:t+1,:]
-            
-            self.last_inputs.append(xt_reshaped)
+            xt = X_sequence[t : t + 1, :]
+            self.last_inputs.append(xt)
 
             # Current hidden state
-            ht = np.tanh(np.dot(xt_reshaped, self.Wxh) + np.dot(h_prev, self.Whh) + self.bh)
-            
+            ht = np.tanh(np.dot(xt, self.Wxh) + np.dot(h_prev, self.Whh) + self.bh)
+
             # Output for current time step (raw, without softmax)
             yt = np.dot(ht, self.Why) + self.by
-            
+
             self.last_hs[t] = ht
             self.last_outputs.append(yt)
             
@@ -215,50 +232,22 @@ class RNN:
         num_classes = self.Why.shape[1]
 
         for epoch in range(self.epochs):
-            total_loss_epoch = 0 # Optional: for tracking average loss
+            for index, (X_sample, Y_target) in enumerate(zip(self.X_train, self.y_train)):
+                raw_outputs = self.forward(X_sample)
 
-            # Assuming self.X_train is a list of sequences (samples)
-            # and self.y_train is a list of corresponding target vectors (many-to-one)
-            if len(self.X_train) != len(self.y_train):
-                raise ValueError("X_train and y_train must have the same number of samples.")
-
-            for i in range(len(self.X_train)):
-                X_sample = self.X_train[i] # A single sequence (sequence_length, vocab_size)
-                Y_target = self.y_train[i] # A single one-hot vector (1, num_classes)
-
-                if not isinstance(X_sample, np.ndarray) or X_sample.ndim != 2:
-                    raise ValueError(f"X_sample at index {i} is not a 2D numpy array.")
-                if not isinstance(Y_target, np.ndarray) or Y_target.ndim != 2 or Y_target.shape[0] != 1:
-                     raise ValueError(f"Y_target at index {i} is not a 2D numpy array of shape (1, num_classes). Got {Y_target.shape}")
-
-
-                # Forward pass
-                raw_outputs = self.forward(X_sample) # list of (1, num_classes) arrays
-
-                # Prepare Y_sequence_for_bptt for many-to-one task
-                # The target Y_target applies only at the last time step.
-                # For other time steps, the error is zero.
                 sequence_len = X_sample.shape[0]
                 Y_sequence_for_bptt = [np.zeros((1, num_classes)) for _ in range(sequence_len - 1)]
-                
-                # Ensure Y_target is correctly shaped before appending
+
                 if Y_target.shape[1] != num_classes:
-                     raise ValueError(f"Y_target at index {i} has incorrect number of classes. Expected {num_classes}, got {Y_target.shape[1]}")
+                    raise ValueError(
+                        f"Y_target at index {index} has incorrect number of classes. Expected {num_classes}, got {Y_target.shape[1]}"
+                    )
                 Y_sequence_for_bptt.append(Y_target.reshape(1, num_classes))
 
-                # Backward pass
                 self.backward(Y_sequence_for_bptt, raw_outputs)
-                
-                # Optional: Calculate loss for this sample (e.g., cross-entropy at the last time step)
-                # last_pred_softmax = self.softmax(raw_outputs[-1])
-                # loss = -np.sum(Y_target * np.log(last_pred_softmax + 1e-9)) # Add epsilon for numerical stability
-                # total_loss_epoch += loss
 
             if (epoch + 1) % 100 == 0 or epoch == self.epochs - 1:
-                # avg_loss = total_loss_epoch / len(self.X_train) if len(self.X_train) > 0 else 0
-                # print(f"Epoch {epoch + 1}/{self.epochs}, Average Loss: {avg_loss:.4f}")
                 print(f"Epoch {epoch + 1}/{self.epochs} completed.")
-                # Note: Loss calculation is commented out as it wasn't explicitly requested to be stored/returned.
 
     def predict_and_print_file(self, id_tweet_vec_sequences, file_name):
         """
@@ -269,25 +258,15 @@ class RNN:
         file_name: The name of the CSV file to write the results to.
         """
         try:
-            with open(file_name, "w") as f:
+            with open(file_name, "w", encoding="utf-8") as f:
                 f.write("id,tweet,emotions\n")
                 for id_val, tweet_text, sequence_vec in id_tweet_vec_sequences:
-                    # Ensure sequence_vec is a numpy array, if not already
-                    if not isinstance(sequence_vec, np.ndarray):
-                        sequence_vec_np = np.array(sequence_vec)
-                    else:
-                        sequence_vec_np = sequence_vec
-                    
-                    # Reshape if it's 1D (vocab_size,) to (1, vocab_size)
-                    # This should ideally be handled by the caller, but as a safeguard:
-                    if sequence_vec_np.ndim == 1:
-                        sequence_vec_np = sequence_vec_np.reshape(1, -1)
+                    sequence_vec_np = self._ensure_sequence(sequence_vec)
+                    y_pred_one_hot = self.predict(sequence_vec_np)
 
-                    y_pred_one_hot = self.predict(sequence_vec_np) # Returns (1, num_classes)
-                    
                     # self.get_emotion_class expects a 1D array/list
-                    pred_emotion = self.get_emotion_class(y_pred_one_hot.flatten())
-                    
+                    pred_emotion = self.get_emotion_class(y_pred_one_hot.flatten()) or "Unknown"
+
                     # Ensure tweet_text doesn't contain characters that break CSV (like commas within the tweet itself)
                     # A simple replacement, more robust CSV handling might be needed for complex text.
                     processed_tweet_text = str(tweet_text).replace(',', ';')
